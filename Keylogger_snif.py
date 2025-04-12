@@ -1,146 +1,308 @@
 import os
 import psutil
 import ctypes
-from ctypes import wintypes
+import threading
 import logging
 import socket
 from datetime import datetime
 import time
+import tkinter as tk
+from tkinter import scrolledtext, filedialog
+from cryptography.fernet import Fernet
+from reportlab.lib.pagesizes import letter
+from reportlab.pdfgen import canvas
+from reportlab.lib.utils import ImageReader
+from reportlab.lib import colors
+from PIL import Image, ImageTk
+from tkinter import ttk
 
-# Logging setup
-logging.basicConfig(filename="keylogger_detection.log", level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+# File paths
+DETECTION_LOG_FILE = "keylogger_detection.log"
+LOGIN_HISTORY_FILE = "login_history.log"
+KEY_FILE = "secret.key"
+LOGO_FILE = "logo.png"
+ICON_FILE = "logo.ico"
 
-# Constants
+# Generate or load encryption key
+if not os.path.exists(KEY_FILE):
+    with open(KEY_FILE, 'wb') as f:
+        f.write(Fernet.generate_key())
+with open(KEY_FILE, 'rb') as f:
+    key = f.read()
+fernet = Fernet(key)
+
+def save_login():
+    user = os.getlogin()
+    ip = socket.gethostbyname(socket.gethostname())
+    now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    data = f"User: {user}, IP: {ip}, Logged in at: {now}\n"
+    encrypted = fernet.encrypt(data.encode())
+    with open(LOGIN_HISTORY_FILE, 'ab') as f:
+        f.write(encrypted + b'\n')
+save_login()
+
+def decrypt_login_history():
+    if not os.path.exists(LOGIN_HISTORY_FILE):
+        return ""
+    with open(LOGIN_HISTORY_FILE, 'rb') as f:
+        lines = f.readlines()
+    output = ""
+    for line in lines:
+        try:
+            decrypted = fernet.decrypt(line.strip()).decode()
+            output += decrypted + "\n"
+        except:
+            continue
+    return output
+
+logging.basicConfig(filename=DETECTION_LOG_FILE, level=logging.INFO,
+                    format="%(asctime)s - %(levelname)s - %(message)s")
+
 WH_KEYBOARD_LL = 13
 KERNEL32 = ctypes.windll.kernel32
 
-# Hook detection using Anti-Hook technique
-def detect_hooks():
-    """
-    Detect if there are any suspicious hooks using Anti-Hook technique.
-    This method uses ctypes to interact with Windows API to check hooks.
-    """
-    try:
-        user32 = ctypes.windll.user32
-        hook_id = user32.SetWindowsHookExW(WH_KEYBOARD_LL, None, KERNEL32.GetModuleHandleW(None), 0)
-        
-        if hook_id:
-            logging.info(f"Suspicious hook detected at {datetime.now()}. Hook ID: {hook_id}")
-            return True
-        else:
-            return False
-    except Exception as e:
-        logging.error(f"Error in detect_hooks: {e}")
-        return False
+class KeyloggerDetectionApp:
+    def __init__(self, root):
+        self.root = root
+        self.root.title("Keylogger Detection App")
+        self.root.state('zoomed')
+        self.fullscreen = True
+        self.root.configure(bg="#1e1e1e")
 
-# Function to list all processes and their DLLs
-def list_processes_and_dlls():
-    """
-    List all the running processes and their associated DLLs.
-    """
-    try:
-        for proc in psutil.process_iter(['pid', 'name']):
-            try:
-                print(f"Process ID: {proc.info['pid']}, Process Name: {proc.info['name']}")
-                logging.info(f"Process ID: {proc.info['pid']}, Process Name: {proc.info['name']}")
-                
-                for dll in proc.memory_maps():
-                    print(f"   DLL: {dll.path}")
-                    logging.info(f"   DLL: {dll.path}")
-                    
-            except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
-                pass
-    except Exception as e:
-        logging.error(f"Error in list_processes_and_dlls: {e}")
+        if os.path.exists(ICON_FILE):
+            self.root.iconbitmap(ICON_FILE)
 
-# HoneyID-like Trap detection
-def honeyid_simulation():
-    """
-    Simulate HoneyID technique by generating bogus events to detect suspicious spyware activity.
-    This function generates keystrokes and mouse movements to trigger any hidden spyware.
-    """
-    try:
-        for i in range(5):
-            bogus_key = chr(65 + i)  # Generate bogus keystroke A, B, C...
-            logging.info(f"Generated bogus key event: {bogus_key} at {datetime.now()}")
-            time.sleep(1)  # Pause between events
-    except Exception as e:
-        logging.error(f"Error in honeyid_simulation: {e}")
+        if os.path.exists(LOGO_FILE):
+            logo_img = Image.open(LOGO_FILE)
+            logo_img = logo_img.resize((150, 75), Image.ANTIALIAS)
+            self.logo = ImageTk.PhotoImage(logo_img)
+            tk.Label(root, image=self.logo, bg="#1e1e1e").pack(pady=10)
 
-# Network traffic monitoring for Bot detection
-def monitor_network_traffic():
-    """
-    Monitor outgoing network traffic to detect bot-like behavior.
-    Bots typically send keystroke logs to remote servers.
-    """
-    try:
-        hostname = socket.gethostname()
-        local_ip = socket.gethostbyname(hostname)
+        self.text_area = scrolledtext.ScrolledText(root, wrap=tk.WORD, width=120, height=30,
+                                                   bg="#2c2f33", fg="white", insertbackground="white",
+                                                   font=("Consolas", 10))
+        self.text_area.pack(pady=10, padx=20)
 
-        with socket.socket(socket.AF_INET, socket.SOCK_RAW, socket.IPPROTO_IP) as sock:
-            sock.bind((local_ip, 0))
-            sock.setsockopt(socket.IPPROTO_IP, socket.IP_HDRINCL, 1)
-            sock.ioctl(socket.SIO_RCVALL, socket.RCVALL_ON)
+        button_frame = tk.Frame(root, bg="#1e1e1e")
+        button_frame.pack(pady=10)
 
-            while True:
-                data, addr = sock.recvfrom(65535)
-                logging.info(f"Packet from {addr} at {datetime.now()}: {data}")
-                if b"IRC" in data:
-                    logging.warning(f"Potential bot activity detected with IRC traffic from {addr}")
-                    break  # For simplicity, stop monitoring after first detection
-    except Exception as e:
-        logging.error(f"Error in monitor_network_traffic: {e}")
+        self.buttons = [
+            ("Detect Hooks", self.run_in_thread(self.detect_hooks), "🛡️", "Alt-d"),
+            ("List Processes", self.run_in_thread(self.list_processes_and_dlls), "📋", "Alt-p"),
+            ("HoneyID Simulation", self.run_in_thread(self.honeyid_simulation), "🐝", "Alt-h"),
+            ("Analyze Behavior", self.run_in_thread(self.detect_suspicious_behavior), "🔍", "Alt-a"),
+            ("Clear Display", self.clear_display, "🧹", "Alt-c"),
+            ("Clear Log Files", self.clear_log_files, "🗑️", "Alt-l"),
+            ("Export Logs (.txt)", self.export_logs, "📄", "Alt-t"),
+            ("Export Logs (.pdf)", self.export_logs_to_pdf, "📑", "Alt-f"),
+            ("Toggle Fullscreen", self.toggle_fullscreen, "🖥️", "Alt-s"),
+        ]
 
-# Dendritic Cell Algorithm (DCA) for behavior-based detection
-def detect_suspicious_behavior():
-    """
-    This function analyzes process behavior by correlating keystrokes, file access, and network activity.
-    Implements a simple version of the Dendritic Cell Algorithm (DCA).
-    """
-    try:
-        for proc in psutil.process_iter(['pid', 'name', 'connections']):
-            try:
-                connections = proc.info['connections']
-                if len(connections) > 0:
-                    # Check for suspicious network activity
-                    logging.info(f"Process {proc.info['name']} has active network connections at {datetime.now()}")
-                    
-                    for conn in connections:
-                        if conn.status == 'ESTABLISHED':
-                            logging.warning(f"Suspicious established connection in {proc.info['name']}: {conn.laddr}")
-                
-                # Check for suspicious file access (keyloggers may write to disk)
-                for mmap in proc.memory_maps():
-                    if 'log' in mmap.path.lower():
-                        logging.warning(f"Suspicious log file found in process {proc.info['name']}: {mmap.path}")
-                        
-            except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
-                pass
-    except Exception as e:
-        logging.error(f"Error in detect_suspicious_behavior: {e}")
+        for i, (label, command, icon, shortcut) in enumerate(self.buttons):
+            btn = tk.Button(button_frame,
+                            text=f"{icon} {label}",
+                            command=command,
+                            bg="#2c2f33",
+                            fg="white",
+                            activebackground="#7289da",
+                            activeforeground="white",
+                            relief=tk.FLAT,
+                            font=("Segoe UI", 10, "bold"),
+                            width=25,
+                            height=2)
+            row, col = divmod(i, 3)
+            btn.grid(row=row, column=col, padx=10, pady=8, sticky="nsew")
+            self.root.bind_all(f"<{shortcut}>", lambda e, cmd=command: cmd())
+            CreateToolTip(btn, label)
 
-# Main execution flow
+    def log(self, message):
+        self.text_area.insert(tk.END, f"{message}\n")
+        self.text_area.see(tk.END)
+        logging.info(message)
+
+    def warn(self, message):
+        self.text_area.insert(tk.END, f"⚠ {message}\n")
+        self.text_area.see(tk.END)
+        logging.warning(message)
+
+    def run_in_thread(self, func):
+        def wrapper():
+            threading.Thread(target=func).start()
+        return wrapper
+
+    def detect_hooks(self):
+        try:
+            user32 = ctypes.windll.user32
+            hook_id = user32.SetWindowsHookExW(WH_KEYBOARD_LL, None, KERNEL32.GetModuleHandleW(None), 0)
+            if hook_id:
+                self.warn(f"Suspicious hook detected. Hook ID: {hook_id}")
+            else:
+                self.log("No suspicious hooks detected.")
+        except Exception as e:
+            self.warn(f"Error in detect_hooks: {e}")
+
+    def list_processes_and_dlls(self):
+        suspicious_keywords = ["keylog", "hook", "log", "key"]
+        try:
+            for proc in psutil.process_iter(['pid', 'name', 'exe']):
+                try:
+                    pname = proc.info['name']
+                    pid = proc.info['pid']
+                    pexe = proc.info.get('exe', 'Unknown')
+
+                    if any(keyword in (pname or "").lower() for keyword in suspicious_keywords) or \
+                       any(keyword in (pexe or "").lower() for keyword in suspicious_keywords):
+                        self.warn(f"Suspicious process: {pname}, PID={pid}, Path={pexe}")
+
+                    for dll in proc.memory_maps():
+                        if any(k in (dll.path or "").lower() for k in suspicious_keywords):
+                            self.warn(f"Suspicious DLL in {pname}, PID={pid}: {dll.path}")
+                except (psutil.NoSuchProcess, psutil.AccessDenied):
+                    pass
+        except Exception as e:
+            self.warn(f"Error in list_processes_and_dlls: {e}")
+
+    def honeyid_simulation(self):
+        try:
+            for i in range(5):
+                bogus_key = chr(65 + i)
+                self.log(f"Generated bogus key event: {bogus_key}")
+                time.sleep(1)
+        except Exception as e:
+            self.warn(f"Error in honeyid_simulation: {e}")
+
+    def detect_suspicious_behavior(self):
+        try:
+            for proc in psutil.process_iter(['pid', 'name']):
+                try:
+                    conns = proc.net_connections(kind='inet')
+                    if conns:
+                        self.log(f"{proc.info['name']} has active connections.")
+                        for conn in conns:
+                            if conn.status == psutil.CONN_ESTABLISHED:
+                                self.warn(f"Suspicious connection in {proc.info['name']}: {conn.laddr}")
+
+                    for mmap in proc.memory_maps():
+                        if 'log' in mmap.path.lower():
+                            self.warn(f"Suspicious log file in {proc.info['name']}: {mmap.path}")
+                except (psutil.NoSuchProcess, psutil.AccessDenied):
+                    pass
+        except Exception as e:
+            self.warn(f"Error in detect_suspicious_behavior: {e}")
+
+    def clear_display(self):
+        self.text_area.delete(1.0, tk.END)
+
+    def clear_log_files(self):
+        open(DETECTION_LOG_FILE, 'w').close()
+        open(LOGIN_HISTORY_FILE, 'wb').close()
+        self.log("Log files cleared.")
+
+    def export_logs(self):
+        path = filedialog.asksaveasfilename(defaultextension=".txt", filetypes=[("Text Files", "*.txt")])
+        if not path:
+            return
+        try:
+            with open(DETECTION_LOG_FILE, 'r') as det_log:
+                detection_data = det_log.read()
+            login_data = decrypt_login_history()
+            with open(path, 'w') as f:
+                f.write("==== Keylogger Detection Log ====\n")
+                f.write(detection_data + "\n")
+                f.write("==== Login History Log ====\n")
+                f.write(login_data)
+            self.log(f"Logs exported to: {path}")
+        except Exception as e:
+            self.warn(f"Log export failed: {e}")
+
+    def export_logs_to_pdf(self):
+        try:
+            export_path = filedialog.asksaveasfilename(defaultextension=".pdf", filetypes=[("PDF Files", "*.pdf")])
+            if not export_path:
+                return
+
+            with open(DETECTION_LOG_FILE, "r") as detection_log:
+                detection_data = detection_log.read()
+            login_data = decrypt_login_history()
+
+            c = canvas.Canvas(export_path, pagesize=letter)
+            width, height = letter
+            margin = 40
+            y_pos = height - margin
+
+            if os.path.exists(LOGO_FILE):
+                logo = ImageReader(LOGO_FILE)
+                c.drawImage(logo, width / 2 - 50, y_pos - 60, width=100, height=50)
+                y_pos -= 70
+
+            c.setFont("Helvetica-Bold", 16)
+            c.setFillColor(colors.darkblue)
+            c.drawCentredString(width / 2, y_pos, "Keylogger Detection Report")
+            y_pos -= 30
+
+            c.setFont("Helvetica", 10)
+            c.setFillColor(colors.gray)
+            c.drawCentredString(width / 2, y_pos, f"Exported: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+            y_pos -= 40
+
+            def draw_block(title, content):
+                nonlocal y_pos
+                c.setFillColor(colors.whitesmoke)
+                c.setFont("Helvetica-Bold", 12)
+                c.drawString(margin, y_pos, title)
+                y_pos -= 20
+                c.setFont("Courier", 9)
+                c.setFillColor(colors.black)
+                for line in content.splitlines():
+                    c.drawString(margin, y_pos, line)
+                    y_pos -= 12
+                    if y_pos < 50:
+                        c.showPage()
+                        y_pos = height - margin
+
+            draw_block("Keylogger Detection Log", detection_data)
+            draw_block("Login History Log", login_data)
+
+            c.setFont("Helvetica-Oblique", 8)
+            c.drawRightString(width - margin, 15, "Page 1")
+            c.save()
+
+            self.log(f"Logs exported as PDF: {export_path}")
+        except Exception as e:
+            self.warn(f"PDF Export failed: {e}")
+
+    def toggle_fullscreen(self):
+        self.fullscreen = not self.fullscreen
+        self.root.attributes("-fullscreen", self.fullscreen)
+
+class CreateToolTip:
+    def __init__(self, widget, text):
+        self.widget = widget
+        self.text = text
+        self.tip_window = None
+        widget.bind("<Enter>", self.show_tip)
+        widget.bind("<Leave>", self.hide_tip)
+
+    def show_tip(self, event=None):
+        if self.tip_window or not self.text:
+            return
+        x, y, _, cy = self.widget.bbox("insert")
+        x = x + self.widget.winfo_rootx() + 40
+        y = y + cy + self.widget.winfo_rooty() + 20
+        self.tip_window = tw = tk.Toplevel(self.widget)
+        tw.wm_overrideredirect(True)
+        tw.wm_geometry(f"+{x}+{y}")
+        label = tk.Label(tw, text=self.text, background="#ffffe0",
+                         relief=tk.SOLID, borderwidth=1,
+                         font=("tahoma", "8", "normal"))
+        label.pack(ipadx=6)
+
+    def hide_tip(self, event=None):
+        if self.tip_window:
+            self.tip_window.destroy()
+            self.tip_window = None
+
 if __name__ == "__main__":
-    print("Starting advanced keylogger detection system...")
-    logging.info("Starting advanced keylogger detection system...")
-
-    # Step 1: Detect hooks
-    if detect_hooks():
-        logging.warning("Suspicious hooks detected! Possible Keylogger.")
-
-    # Step 2: List processes and DLLs
-    print("Listing all processes and their associated DLLs...")
-    list_processes_and_dlls()
-
-    # Step 3: HoneyID simulation
-    print("Simulating HoneyID trap...")
-    honeyid_simulation()
-
-    # Step 4: Monitor network traffic for bot detection
-    print("Monitoring network traffic for bot-like behavior...")
-    # Run this in a separate thread or stop after first detection
-    # monitor_network_traffic()
-
-    # Step 5: Analyze process behavior with DCA
-    print("Analyzing suspicious process behavior...")
-    detect_suspicious_behavior()
+    root = tk.Tk()
+    app = KeyloggerDetectionApp(root)
+    root.mainloop()

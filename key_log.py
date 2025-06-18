@@ -10,15 +10,12 @@ import ctypes
 
 IS_WINDOWS = platform.system() == 'Windows'
 
-# File to store logs
-DETECTION_LOG_FILE = "keylogger_detection.log"
-
 class KeyloggerDetectionApp:
     def __init__(self, root):
         self.root = root
         self.root.title("Keylogger Detection App")
         self.fullscreen = True
-        self.ask_before_kill = True
+        self.ask_before_kill = True  # Toggle by checkbox
 
         self.dark_mode = True
         self.root.configure(bg="#1e1e1e")
@@ -27,7 +24,6 @@ class KeyloggerDetectionApp:
         else:
             self.root.attributes('-zoomed', True)
 
-        # Mode Toggle
         self.mode_toggle = tk.Button(root, text="🌙 Dark Mode", command=self.toggle_mode,
                                      bg="#2c2f33", fg="white", font=("Segoe UI", 9))
         self.mode_toggle.place(relx=0.97, rely=0.01, anchor='ne')
@@ -55,16 +51,27 @@ class KeyloggerDetectionApp:
                                      font=("Segoe UI", 10, "bold"), width=30, height=2)
         self.behavior_btn.grid(row=0, column=2, padx=10, pady=10)
 
+        # Auto Kill Checkbox
+        self.auto_kill_var = tk.BooleanVar(value=False)
+        self.auto_kill_check = tk.Checkbutton(button_frame, text="Auto-Kill Suspicious Process",
+                                              variable=self.auto_kill_var,
+                                              bg="#1e1e1e", fg="white", selectcolor="#1e1e1e",
+                                              font=("Segoe UI", 10), command=self.update_kill_option)
+        self.auto_kill_check.grid(row=1, column=0, columnspan=2, pady=(0, 10))
+
         self.export_var = tk.StringVar()
         self.export_dropdown = ttk.Combobox(button_frame, textvariable=self.export_var, width=29, font=("Segoe UI", 10))
         self.export_dropdown['values'] = ("Export as .txt", "Export as .csv", "Export as .pdf")
         self.export_dropdown.current(0)
-        self.export_dropdown.grid(row=0, column=3, padx=10, pady=10)
+        self.export_dropdown.grid(row=1, column=2, padx=10, pady=(0, 10))
 
         self.export_btn = tk.Button(button_frame, text="📄 Export Logs", command=self.export_logs,
                                      bg="#2c2f33", fg="white", activebackground="#7289da",
                                      font=("Segoe UI", 10, "bold"), width=30, height=2)
-        self.export_btn.grid(row=0, column=4, padx=10, pady=10)
+        self.export_btn.grid(row=1, column=3, padx=10, pady=(0, 10))
+
+    def update_kill_option(self):
+        self.ask_before_kill = not self.auto_kill_var.get()
 
     def toggle_mode(self):
         self.dark_mode = not self.dark_mode
@@ -81,8 +88,6 @@ class KeyloggerDetectionApp:
         log_entry = f"[{timestamp}] {message}"
         self.text_area.insert(tk.END, log_entry + "\n")
         self.text_area.see(tk.END)
-        with open(DETECTION_LOG_FILE, 'a') as f:
-            f.write(log_entry + "\n")
 
     def run_in_thread(self, func):
         def wrapper():
@@ -115,6 +120,9 @@ class KeyloggerDetectionApp:
                         if answer:
                             proc.terminate()
                             self.log(f"⛔ Terminated process: {pname} (PID {proc.pid})")
+                    else:
+                        proc.terminate()
+                        self.log(f"⛔ Auto-killed: {pname} (PID {proc.pid})")
             except (psutil.NoSuchProcess, psutil.AccessDenied):
                 continue
         if not found:
@@ -128,8 +136,7 @@ class KeyloggerDetectionApp:
         if not path:
             return
         try:
-            with open(DETECTION_LOG_FILE, 'r') as f:
-                data = f.read()
+            data = self.text_area.get("1.0", tk.END)
             if extension == ".pdf":
                 from reportlab.lib.pagesizes import letter
                 from reportlab.pdfgen import canvas
@@ -140,11 +147,11 @@ class KeyloggerDetectionApp:
                 c.drawText(textobject)
                 c.save()
             else:
-                with open(path, 'w') as out:
+                with open(path, 'w', encoding='utf-8') as out:
                     out.write(data)
-            self.log(f"Logs exported to {path}")
+            self.text_area.insert(tk.END, f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Logs exported to {path}\n")
         except Exception as e:
-            self.log(f"Export failed: {e}")
+            self.text_area.insert(tk.END, f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Export failed: {e}\n")
 
     def detect_behavioral_keylogger(self):
         self.log("🧠 Performing behavioral keylogger detection...")

@@ -7,7 +7,7 @@ import socket
 from datetime import datetime
 import time
 import tkinter as tk
-from tkinter import scrolledtext, filedialog
+from tkinter import scrolledtext, filedialog, messagebox
 from cryptography.fernet import Fernet
 from reportlab.lib.pagesizes import letter
 from reportlab.pdfgen import canvas
@@ -15,6 +15,7 @@ from reportlab.lib.utils import ImageReader
 from reportlab.lib import colors
 from PIL import Image, ImageTk
 from tkinter import ttk
+import platform
 
 # File paths
 DETECTION_LOG_FILE = "keylogger_detection.log"
@@ -22,6 +23,8 @@ LOGIN_HISTORY_FILE = "login_history.log"
 KEY_FILE = "secret.key"
 LOGO_FILE = "logo.png"
 ICON_FILE = "logo.ico"
+
+IS_WINDOWS = platform.system() == 'Windows'
 
 # Generate or load encryption key
 if not os.path.exists(KEY_FILE):
@@ -58,18 +61,24 @@ def decrypt_login_history():
 logging.basicConfig(filename=DETECTION_LOG_FILE, level=logging.INFO,
                     format="%(asctime)s - %(levelname)s - %(message)s")
 
-WH_KEYBOARD_LL = 13
-KERNEL32 = ctypes.windll.kernel32
+if IS_WINDOWS:
+    WH_KEYBOARD_LL = 13
+    KERNEL32 = ctypes.windll.kernel32
 
 class KeyloggerDetectionApp:
     def __init__(self, root):
         self.root = root
         self.root.title("Keylogger Detection App")
-        self.root.state('zoomed')
+
+        if IS_WINDOWS:
+            self.root.state('zoomed')
+        else:
+            self.root.attributes('-zoomed', True)
+
         self.fullscreen = True
         self.root.configure(bg="#1e1e1e")
 
-        if os.path.exists(ICON_FILE):
+        if os.path.exists(ICON_FILE) and IS_WINDOWS:
             self.root.iconbitmap(ICON_FILE)
 
         if os.path.exists(LOGO_FILE):
@@ -131,6 +140,9 @@ class KeyloggerDetectionApp:
         return wrapper
 
     def detect_hooks(self):
+        if not IS_WINDOWS:
+            self.warn("Hook detection is only supported on Windows.")
+            return
         try:
             user32 = ctypes.windll.user32
             hook_id = user32.SetWindowsHookExW(WH_KEYBOARD_LL, None, KERNEL32.GetModuleHandleW(None), 0)
@@ -142,7 +154,7 @@ class KeyloggerDetectionApp:
             self.warn(f"Error in detect_hooks: {e}")
 
     def list_processes_and_dlls(self):
-        suspicious_keywords = ["keylog", "hook", "log", "key"]
+        suspicious_keywords = ["keylog", "hook", "logger", "capture", "record"]
         try:
             for proc in psutil.process_iter(['pid', 'name', 'exe']):
                 try:
@@ -152,15 +164,16 @@ class KeyloggerDetectionApp:
 
                     if any(keyword in (pname or "").lower() for keyword in suspicious_keywords) or \
                        any(keyword in (pexe or "").lower() for keyword in suspicious_keywords):
-                        self.warn(f"Suspicious process: {pname}, PID={pid}, Path={pexe}")
-
-                    for dll in proc.memory_maps():
-                        if any(k in (dll.path or "").lower() for k in suspicious_keywords):
-                            self.warn(f"Suspicious DLL in {pname}, PID={pid}: {dll.path}")
+                        self.warn(f"⚠ Suspicious process detected: {pname}, PID={pid}, Path={pexe}")
+                        answer = messagebox.askyesno("Terminate Process?",
+                            f"Suspicious process detected:\n\nName: {pname}\nPID: {pid}\nPath: {pexe}\n\nDo you want to terminate it?")
+                        if answer:
+                            proc.terminate()
+                            self.log(f"⛔ Terminated process: {pname} (PID {pid})")
                 except (psutil.NoSuchProcess, psutil.AccessDenied):
-                    pass
+                    continue
         except Exception as e:
-            self.warn(f"Error in list_processes_and_dlls: {e}")
+            self.warn(f"Error in process detection: {e}")
 
     def honeyid_simulation(self):
         try:
@@ -175,20 +188,31 @@ class KeyloggerDetectionApp:
         try:
             for proc in psutil.process_iter(['pid', 'name']):
                 try:
-                    conns = proc.net_connections(kind='inet')
-                    if conns:
-                        self.log(f"{proc.info['name']} has active connections.")
-                        for conn in conns:
-                            if conn.status == psutil.CONN_ESTABLISHED:
-                                self.warn(f"Suspicious connection in {proc.info['name']}: {conn.laddr}")
+                    suspicious = False
+                    conn_info = ""
+                    log_info = ""
+
+                    for conn in proc.connections(kind='inet'):
+                        if conn.status == psutil.CONN_ESTABLISHED:
+                            conn_info += f"Active Connection: {conn.laddr}\n"
+                            suspicious = True
 
                     for mmap in proc.memory_maps():
                         if 'log' in mmap.path.lower():
-                            self.warn(f"Suspicious log file in {proc.info['name']}: {mmap.path}")
+                            log_info += f"Log File: {mmap.path}\n"
+                            suspicious = True
+
+                    if suspicious:
+                        self.warn(f"⚠ Suspicious activity in {proc.info['name']} (PID {proc.pid})")
+                        answer = messagebox.askyesno("Terminate Suspicious Process?",
+                            f"{proc.info['name']} (PID {proc.pid}) shows suspicious behavior.\n\n{conn_info}{log_info}\nDo you want to terminate it?")
+                        if answer:
+                            proc.terminate()
+                            self.log(f"⛔ Terminated process: {proc.info['name']} (PID {proc.pid})")
                 except (psutil.NoSuchProcess, psutil.AccessDenied):
-                    pass
+                    continue
         except Exception as e:
-            self.warn(f"Error in detect_suspicious_behavior: {e}")
+            self.warn(f"Error in behavior detection: {e}")
 
     def clear_display(self):
         self.text_area.delete(1.0, tk.END)
